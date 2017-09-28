@@ -220,6 +220,18 @@ public class AutoMigration
                     isPrimaryKey = true;
                 }
             }
+            if(isPrimaryKey && !objectSchema.isPrimaryKey(modelFieldName)) {
+                if(objectSchema.hasPrimaryKey()) {
+                    throw new UnsupportedOperationException(
+                            "Multiple primary keys are not supported: [" + objectSchema
+                                    .getClassName() + " :: " + modelFieldName + "]");
+                }
+                objectSchema.addPrimaryKey(modelFieldName);
+            }
+            if(!isPrimaryKey && objectSchema.isPrimaryKey(modelFieldName)) {
+                objectSchema.removePrimaryKey();
+            }
+            // index management must be after primary key because removePrimaryKey() removes index as well.
             if((isIndexed || isPrimaryKey) && !objectSchema.hasIndex(modelFieldName)) {
                 objectSchema.addIndex(modelFieldName);
             }
@@ -237,15 +249,6 @@ public class AutoMigration
                 if(!isRequired && !objectSchema.isNullable(modelFieldName)) {
                     objectSchema.setNullable(modelFieldName, true);
                 }
-            }
-            if(isPrimaryKey && !objectSchema.isPrimaryKey(modelFieldName)) {
-                if(objectSchema.hasPrimaryKey()) {
-                    throw new UnsupportedOperationException("Multiple primary keys are not supported: [" + objectSchema.getClassName() + " :: " + modelFieldName + "]");
-                }
-                objectSchema.addPrimaryKey(modelFieldName);
-            }
-            if(!isPrimaryKey && objectSchema.isPrimaryKey(modelFieldName)) {
-                objectSchema.removePrimaryKey();
             }
         }
     }
