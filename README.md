@@ -13,6 +13,8 @@ Please read the section below on what annotations you need to apply to make thin
 ## Proguard
 
 ```
+-keepnames public class * extends io.realm.RealmModel
+-keep public class * extends io.realm.RealmModel { *; }
 -keepnames public class * extends io.realm.RealmObject
 -keep public class * extends io.realm.RealmObject { *; }
 -keepattributes *Annotation*
