@@ -30,7 +30,6 @@ import java.util.Map;
 import java.util.Set;
 
 import io.realm.DynamicRealm;
-import io.realm.FieldAttribute;
 import io.realm.RealmConfiguration;
 import io.realm.RealmList;
 import io.realm.RealmMigration;
@@ -38,40 +37,29 @@ import io.realm.RealmModel;
 import io.realm.RealmObjectSchema;
 import io.realm.RealmResults;
 import io.realm.RealmSchema;
+import io.realm.annotations.Ignore;
+import io.realm.annotations.Index;
+import io.realm.annotations.PrimaryKey;
+import io.realm.annotations.Required;
 
 /**
  * This migration attempts to migrate the Realm schema from one version to the current models provided in the configuration.
  *
  * In case of mismatch, fields defined only in schema but not in model are removed, and fields defined only in model but not in schema are added.
  *
- * To properly handle `@Index`, `@Required`, `@PrimaryKey` annotations, you must specify {@link MigratedField} with the specified FieldAttributes.
- *
- * To properly handle `@Ignore`, you must specify {@link MigrationIgnore}.
- *
- * To add `RealmList` field, you must specify {@link MigratedLink} on that field with the link type.
+ * To add `RealmList` field, you must specify {@link MigratedList} on that field with the link type.
  *
  * Requires:
- * -keepnames public class * extends io.realm.RealmObject
- * -keep public class * extends io.realm.RealmObject { *; }
+ * -keepnames public class * extends io.realm.RealmModel
+ * -keep public class * extends io.realm.RealmModel { *; }
  * -keepattributes *Annotation*
  */
 public class AutoMigration
         implements RealmMigration {
     @Retention(RetentionPolicy.RUNTIME)
     @Target(ElementType.FIELD)
-    public @interface MigrationIgnore {
-    }
-
-    @Retention(RetentionPolicy.RUNTIME)
-    @Target(ElementType.FIELD)
-    public @interface MigratedField {
-        FieldAttribute[] fieldAttributes();
-    }
-
-    @Retention(RetentionPolicy.RUNTIME)
-    @Target(ElementType.FIELD)
-    public @interface MigratedLink {
-        Class<? extends RealmModel> linkType(); // RealmList<T extends RealmModel> is nice, but T cannot be obtained through reflection.
+    public @interface MigratedList {
+        Class<?> listType(); // RealmList<T extends RealmModel> is nice, but T cannot be obtained through reflection.
     }
 
     @Override
@@ -101,11 +89,11 @@ public class AutoMigration
         Set<String> schemaClassNames = new LinkedHashSet<>();
         Map<String, RealmObjectSchema> schemaClassNameToObjectSchemaMap = new LinkedHashMap<>();
         for(Class<? extends RealmModel> modelClass : latestRealmObjectClasses) {
-            modelClassNames.add(modelClass.getSimpleName()); // "Cat", requires `-keepnames public class * extends io.realm.RealmObject`
+            modelClassNames.add(modelClass.getSimpleName()); // "Cat", requires `-keepnames public class * extends io.realm.RealmModel`
             modelClassNameToClassMap.put(modelClass.getSimpleName(), modelClass);
         }
         for(RealmObjectSchema objectSchema : initialObjectSchemas) {
-            schemaClassNames.add(objectSchema.getClassName()); // "Cat", requires `-keepnames public class * extends io.realm.RealmObject`
+            schemaClassNames.add(objectSchema.getClassName()); // "Cat", requires `-keepnames public class * extends io.realm.RealmModel`
             schemaClassNameToObjectSchemaMap.put(objectSchema.getClassName(), objectSchema);
         }
 
@@ -160,7 +148,7 @@ public class AutoMigration
             if(Modifier.isTransient(field.getModifiers())) { // transient fields are ignored.
                 continue;
             }
-            if(field.isAnnotationPresent(MigrationIgnore.class)) {
+            if(field.isAnnotationPresent(Ignore.class)) {
                 continue; // manual ignore.
             }
             Class<?> fieldType = field.getType();
@@ -173,18 +161,21 @@ public class AutoMigration
                         //noinspection UnnecessaryContinue
                         continue;
                     } else if(fieldType == RealmList.class) {
-                        // TODO: value lists in 4.0.0!
-                        MigratedLink migratedLink = field.getAnnotation(MigratedLink.class);
-                        if(migratedLink == null) {
-                            throw new IllegalStateException("Link list [" + field.getName() + "] cannot be added to the schema without @MigratedLink(linkType) annotation.");
+                        MigratedList migratedList = field.getAnnotation(MigratedList.class);
+                        if(migratedList == null) {
+                            throw new IllegalStateException("RealmList [" + field.getName() + "] cannot be added to the schema without @MigratedList(listType) annotation.");
                         }
-                        Class<? extends RealmModel> linkObjectClass = migratedLink.linkType();
-                        String linkedObjectName = linkObjectClass.getSimpleName();
-                        RealmObjectSchema linkedObjectSchema = realmSchema.get(linkedObjectName);
-                        if(linkedObjectSchema == null) {
-                            throw new IllegalStateException("The object schema [" + linkedObjectName + "] defined by link [" + modelFieldName + "] was not found in the schema!");
+                        Class<?> listType = migratedList.listType();
+                        if(listType.isAssignableFrom(RealmModel.class)) {
+                            String linkedObjectName = listType.getSimpleName();
+                            RealmObjectSchema linkedObjectSchema = realmSchema.get(linkedObjectName);
+                            if(linkedObjectSchema == null) {
+                                throw new IllegalStateException("The object schema [" + linkedObjectName + "] defined by link [" + modelFieldName + "] was not found in the schema!");
+                            }
+                            objectSchema.addRealmListField(field.getName(), linkedObjectSchema);
+                        } else if(isFieldRegularObjectType(listType) || isPrimitiveObjectWrapper(listType)) { // primitive list
+                            objectSchema.addRealmListField(field.getName(), listType);
                         }
-                        objectSchema.addRealmListField(field.getName(), linkedObjectSchema);
                     } else {
                         if(!RealmModel.class.isAssignableFrom(fieldType)) {
                             continue; // this is most likely an @Ignore field, let's just ignore it
@@ -199,56 +190,53 @@ public class AutoMigration
                 }
             }
             // even if it's added, its attributes might be mismatched! This must happen both if newly added, or if already exists.
-            if(isNonNullPrimitive(fieldType) || isPrimitiveObjectWrapper(fieldType) || isFieldRegularObjectType(fieldType)) {
+            if(isNonNullPrimitive(fieldType) || isPrimitiveObjectWrapper(fieldType) || isFieldRegularObjectType(fieldType) || isPrimitiveRealmList(
+                    field)) {
                 matchMigratedField(objectSchema, modelFieldName, field);
             }
         }
     }
 
     private void matchMigratedField(RealmObjectSchema objectSchema, String modelFieldName, Field field) {
-        MigratedField migratedField = field.getAnnotation(MigratedField.class); // @Required is not kept alive by its RetentionPolicy. We must use our own!
-        if(migratedField != null) {
-            boolean isIndexed = false;
-            boolean isRequired = false;
-            boolean isPrimaryKey = false;
-            for(FieldAttribute fieldAttribute : migratedField.fieldAttributes()) {
-                if(fieldAttribute == FieldAttribute.INDEXED) {
-                    isIndexed = true;
-                } else if(fieldAttribute == FieldAttribute.REQUIRED) {
-                    isRequired = true;
-                } else if(fieldAttribute == FieldAttribute.PRIMARY_KEY) {
-                    isPrimaryKey = true;
-                }
-            }
-            if(isPrimaryKey && !objectSchema.isPrimaryKey(modelFieldName)) {
-                if(objectSchema.hasPrimaryKey()) {
-                    throw new UnsupportedOperationException(
-                            "Multiple primary keys are not supported: [" + objectSchema
-                                    .getClassName() + " :: " + modelFieldName + "]");
-                }
-                objectSchema.addPrimaryKey(modelFieldName);
-            }
-            if(!isPrimaryKey && objectSchema.isPrimaryKey(modelFieldName)) {
+        boolean isIndexed = false;
+        boolean isRequired = false;
+        boolean isPrimaryKey = false;
+        if(field.isAnnotationPresent(Index.class)) {
+            isIndexed = true;
+        }
+        if(field.isAnnotationPresent(Required.class)) {
+            isRequired = true;
+        }
+        if(field.isAnnotationPresent(PrimaryKey.class)) {
+            isPrimaryKey = true;
+        }
+
+        if(isPrimaryKey && !objectSchema.isPrimaryKey(modelFieldName)) {
+            if(objectSchema.hasPrimaryKey()) {
                 objectSchema.removePrimaryKey();
             }
-            // index management must be after primary key because removePrimaryKey() removes index as well.
-            if((isIndexed || isPrimaryKey) && !objectSchema.hasIndex(modelFieldName)) {
-                objectSchema.addIndex(modelFieldName);
+            objectSchema.addPrimaryKey(modelFieldName);
+        }
+        if(!isPrimaryKey && objectSchema.isPrimaryKey(modelFieldName)) {
+            objectSchema.removePrimaryKey();
+        }
+        // index management must be after primary key because removePrimaryKey() removes index as well.
+        if((isIndexed || isPrimaryKey) && !objectSchema.hasIndex(modelFieldName)) {
+            objectSchema.addIndex(modelFieldName);
+        }
+        if(!isIndexed && !isPrimaryKey /* primary key is indexed by default! */ && objectSchema.hasIndex(modelFieldName)) {
+            objectSchema.removeIndex(modelFieldName);
+        }
+        if(isNonNullPrimitive(field.getType())) {
+            if(!objectSchema.isRequired(modelFieldName)) {
+                objectSchema.setNullable(modelFieldName, false);
             }
-            if(!isIndexed && !isPrimaryKey /* primary key is indexed by default! */ && objectSchema.hasIndex(modelFieldName)) {
-                objectSchema.removeIndex(modelFieldName);
+        } else {
+            if(isRequired && objectSchema.isNullable(modelFieldName)) {
+                objectSchema.setNullable(modelFieldName, false);
             }
-            if(isNonNullPrimitive(field.getType())) {
-                if(!objectSchema.isRequired(modelFieldName)) {
-                    objectSchema.setNullable(modelFieldName, false);
-                }
-            } else {
-                if(isRequired && objectSchema.isNullable(modelFieldName)) {
-                    objectSchema.setNullable(modelFieldName, false);
-                }
-                if(!isRequired && !objectSchema.isNullable(modelFieldName)) {
-                    objectSchema.setNullable(modelFieldName, true);
-                }
+            if(!isRequired && !objectSchema.isNullable(modelFieldName)) {
+                objectSchema.setNullable(modelFieldName, true);
             }
         }
     }
@@ -267,5 +255,19 @@ public class AutoMigration
         return fieldType == boolean.class //
                 || fieldType == byte.class || fieldType == short.class || fieldType == int.class || fieldType == long.class //
                 || fieldType == float.class || fieldType == double.class;
+    }
+
+    private boolean isPrimitiveRealmList(Field field) {
+        Class<?> fieldType = field.getType();
+        if(!(fieldType == RealmList.class)) {
+            return false;
+        }
+        MigratedList migratedList = field.getAnnotation(MigratedList.class);
+        //noinspection SimplifiableIfStatement
+        if(migratedList == null) {
+            return false; // hopefully the user did not want an exception here.
+        }
+        Class<?> listType = migratedList.listType();
+        return isPrimitiveObjectWrapper(listType) || isFieldRegularObjectType(listType);
     }
 }

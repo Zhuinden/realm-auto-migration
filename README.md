@@ -2,7 +2,7 @@
 
 Automatic migration from the currently existing schema to the currently existing model classes.
 
-Heavily proof of concept, think `0.0.1-alpha`, but it worked for my example codes.
+The API is subject to change.
 
 ## Using AutoMigration
 
@@ -26,21 +26,13 @@ This migration attempts to migrate the Realm schema from one version to the curr
 
 In case of mismatch, fields defined only in schema but not in model are removed, and fields defined only in model but not in schema are added.
 
-## Field Attributes
-
-To properly handle `@Index`, `@Required`, `@PrimaryKey` annotations, you must specify {@link MigratedField} with the specified FieldAttributes.
-
-Please note that if this annotation is not present, then these properties won't be matched against the field.
-
-To clear the annotations (for example making a column no longer have `@Index`), you'll need to add `@MigratedField(fieldAttributes={})`.
-
-## Ignored fields
-
-To properly handle `@Ignore`, you must specify {@link MigrationIgnore}.
-
 ## Linked fields
 
-To add `RealmList` field, you must specify {@link MigratedLink} on that field with the link type.
+To add `RealmList` field, you must specify {@link MigratedList} on that field with the list type.
+
+This properly supports both links and primitive lists. 
+
+`@AutoMigration.MigratedList` must be applied to detect changes in `RealmList<Primitive>`'s `@Required` annotation.
 
 ## Example
 
@@ -48,21 +40,21 @@ To add `RealmList` field, you must specify {@link MigratedLink} on that field wi
 public class Dog
         extends RealmObject {
     @PrimaryKey
-    @AutoMigration.MigratedField(fieldAttributes = {FieldAttribute.PRIMARY_KEY})
     private long id;
 
     @Index
-    @AutoMigration.MigratedField(fieldAttributes = {FieldAttribute.INDEXED})
     private String name;
 
     @Required
-    @AutoMigration.MigratedField(fieldAttributes = {FieldAttribute.REQUIRED})
     private String ownerName;
 
     private Cat cat;
 
-    @AutoMigration.MigratedLink(linkType = Cat.class)
+    @AutoMigration.MigratedList(listType = Cat.class)
     private RealmList<Cat> manyCats;
+    
+    @AutoMigration.MigratedList(listType = String.class)
+    private RealmList<String> phoneNumbers;
 }
 ```
 
