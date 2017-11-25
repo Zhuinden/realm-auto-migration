@@ -166,7 +166,7 @@ public class AutoMigration
                             throw new IllegalStateException("RealmList [" + field.getName() + "] cannot be added to the schema without @MigratedList(listType) annotation.");
                         }
                         Class<?> listType = migratedList.listType();
-                        if(listType.isAssignableFrom(RealmModel.class)) {
+                        if(RealmModel.class.isAssignableFrom(listType)) {
                             String linkedObjectName = listType.getSimpleName();
                             RealmObjectSchema linkedObjectSchema = realmSchema.get(linkedObjectName);
                             if(linkedObjectSchema == null) {
