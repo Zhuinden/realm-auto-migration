@@ -106,22 +106,28 @@ public class AutoMigration
             }
         }
 
-        // we must check if existing schema classes have changed fields, or if they were removed from the model.
+        // we must check if existing schema classes have changed fields
         for(String objectClassName : schemaClassNames) {
             RealmObjectSchema objectSchema = schemaClassNameToObjectSchemaMap.get(objectClassName);
             if(modelClassNames.contains(objectClassName)) {
                 // the model was found in the schema, we must match their fields.
                 Class<? extends RealmModel> modelClass = modelClassNameToClassMap.get(objectClassName);
                 matchFields(realmSchema, objectSchema, modelClass);
-            } else {
-                // the model class was not part of the schema, so we must remove the object schema.
-                realmSchema.remove(objectClassName);
             }
         }
         // now that we've set up our classes, we must also match the fields of newly created schema classes.
         for(RealmObjectSchema createdObjectSchema : createdObjectSchemas) {
             Class<? extends RealmModel> modelClass = modelClassNameToClassMap.get(createdObjectSchema.getClassName());
             matchFields(realmSchema, createdObjectSchema, modelClass);
+        }
+            
+        // we must check if classes were removed from the model.
+        for(String objectClassName : schemaClassNames) {
+            RealmObjectSchema objectSchema = schemaClassNameToObjectSchemaMap.get(objectClassName);
+            if(!modelClassNames.contains(objectClassName)) {
+                // the model class was not part of the schema, so we must remove the object schema.
+                realmSchema.remove(objectClassName);
+            }
         }
     }
 
